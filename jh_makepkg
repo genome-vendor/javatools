@@ -1,0 +1,394 @@
+#!/bin/bash --
+
+# options:
+#    make, maven, ant, byhand
+#    app, library
+#    gcj, sun
+
+COMPAT=8
+STANDARDS=3.9.2
+
+set -e
+
+. /usr/share/javahelper/jh_lib.sh
+
+syntax()
+{
+   echo -e "Usage: jh_makepkg [options]"
+   echo -e "Options:"
+   echo -e "\t-h --help: show this text"
+   echo -e "\t-V --version: show the version"
+   echo -e "\t-p<name> --package=<name>: Set the name of the package (defaults to directory name without version)"
+   echo -e "\t-m<name> --maintainer=<name>: Set the maintainer name (defaults to DEBFULLNAME, NAME, or the user's full name)"
+   echo -e "\t-e<email> --email=<email>: Set the maintainer email (defaults to DEBEMAIL EMAIL or user@host)"
+   echo -e "\t-v<version> --upstream=<version>: Set the upstream version (defaults to the directory name after a -)"
+   echo -e "\t-c --clean: Tidy up common problems with Java source packages. Removes .class, .jar files and pre-built javadoc trees before creating the orig.tar.gz"
+   echo -e "\tPick One:"
+   echo -e "\t-l --library: This is a library package"
+   echo -e "\t-a --app: This is an application package"
+   echo -e "\tPick One:"
+   echo -e "\t-t --ant: Builds with ant"
+   echo -e "\t-M --maven: Builds with maven2"
+   echo -e "\t-k --makefiles: Builds with make"
+   echo -e "\t-n --none: Create own buildsystem"
+   echo -e "\tPick One:"
+   echo -e "\t-6 --sun6: Build with Sun Java <1.6 (package must be contrib)"
+   echo -e "\t-g --gcj: Build with gcj"
+   echo -e "\t-d --default: Build with default free platform compiler"
+   echo -e "\t-o --openjdk: Build with openjdk 6"
+   echo -e "Environment Variables:"
+   echo -e "\tDEBEMAIL: Default maintainer email address"
+   echo -e "\tEMAIL: Default maintainer email address"
+   echo -e "\tDEBFULLNAME: Default maintainer name"
+   echo -e "\tNAME: Default maintainer name"
+   exit 1
+}
+
+ARGS="p package m maintainer e email v upstream l library a app t ant k makefile n none 6 sun6 g gcj o openjdk M maven d default" parseargs "$@"
+
+BUILDDIR="`pwd`"
+
+if [ -z "`getarg v upstream`" ]; then
+   VERSION="`basename "$BUILDDIR" | sed -n 's/^.*-//p'`"
+else
+   VERSION="`getarg v upstream`"
+fi
+if [ -z "`getarg p package`" ]; then
+   PACKAGE="`basename "$BUILDDIR" | sed -n 's/\(-.*\)\{0,1\}$//p'`"
+else
+   PACKAGE="`getarg p package`"
+fi
+
+if [ -z "$VERSION" ]; then
+   echo "Can't determine version from directory name `basename "$BUILDDIR"`, maybe it is not in the form package-version?"
+   exit 1
+fi
+
+if [ -z "$PACKAGE" ]; then
+   echo "Can't determine package name from directory name `basename "$BUILDDIR"`, maybe it is not in the form package-version?"
+   exit 1
+fi
+
+if [ ! -f ../${PACKAGE}_${VERSION}.orig.tar.gz ]; then
+
+   if [ -n "`getarg c clean`" ]; then
+      echo "Cleaning up source tree before creating orig.tar.gz"
+      find . -name '*.class' -print0 | xargs -0 rm -f
+      find . -name '*.jar' -print0 | xargs -0 rm -f
+      IFS='
+'
+      for doctree in `find . -name allclasses-frame.html`; do
+         TREE="`dirname $doctree`"
+         rm -rf "$TREE"/*
+      done
+      find * -type d -print0 | xargs -0 rmdir -p --ignore-fail-on-non-empty
+   fi
+
+   echo "Creating package $PACKAGE version $VERSION."
+   echo 
+   echo "Building from source in $BUILDDIR"
+
+   cd ..
+   echo "Creating orig source tarball: ${PACKAGE}_${VERSION}.orig.tar.gz"
+   tar zcf "${PACKAGE}_${VERSION}.orig.tar.gz" "`basename "$BUILDDIR"`"
+   cd "$BUILDDIR"
+
+fi
+
+if [ -n "`getarg e email`" ]; then
+   DEBEMAIL="`getarg e email`"
+fi
+
+if [ -z "$DEBEMAIL" ]; then 
+   DEBEMAIL="$EMAIL"
+fi
+
+if [ -z "$DEBEMAIL" ] && [ -f /etc/mailname ]; then 
+   DEBEMAIL="`whoami`@`cat /etc/mailname`"
+fi
+
+if [ -z "$DEBEMAIL" ]; then 
+   DEBEMAIL="`whoami`@`hostname --fqdn`"
+fi
+
+if [ -n "`getarg m maintainer`" ]; then
+   DEBFULLNAME="`getarg m maintainer`"
+fi
+
+if [ -z "$DEBFULLNAME" ]; then 
+   DEBFULLNAME="$NAME"
+fi
+
+if [ -z "$DEBFULLNAME" ] ; then 
+   DEBFULLNAME="$(getent passwd $(whoami) | cut -d: -f5 | cut -d, -f1)"
+fi
+
+echo "Packager: $DEBFULLNAME <$DEBEMAIL>"
+echo
+
+if [ -n "`getarg a app`" ]; then
+   TYPE="app"
+elif [ -n "`getarg l library`" ]; then
+   TYPE="lib"
+else
+   echo "What type of package is it? Application, or Library?"
+   echo "Select:"
+   echo -e "\t[A] Application (Default)"
+   echo -e "\t[L] Library"
+   echo -n "[Al] $ "
+   read t
+   echo
+   case $t in
+      "L"|"l")
+         TYPE="lib"
+         echo "Selected: Library"
+         ;;
+      *)
+         TYPE="app"
+         echo "Selected: Application"
+         ;;
+   esac    
+fi
+case $TYPE in
+   "app")
+      SECTION=misc
+      SRCPACKAGE="$PACKAGE"
+      BINPACKAGE="$PACKAGE"
+   ;;
+   "lib")
+      SECTION=java
+      SRCPACKAGE="$PACKAGE"
+      BINPACKAGE="$PACKAGE"
+      if ! echo $BINPACKAGE | grep "^lib" >/dev/null; then
+         BINPACKAGE="lib$BINPACKAGE"
+      fi
+      if ! echo $BINPACKAGE | grep -- "-java$" >/dev/null; then
+         BINPACKAGE="$BINPACKAGE-java"
+      fi
+   ;;
+esac
+
+if [ -n "`getarg t ant`" ]; then
+   BUILD="ant"
+elif [ -n "`getarg M maven`" ]; then
+   BUILD="maven"
+elif [ -n "`getarg k makefiles`" ]; then
+   BUILD="make"
+elif [ -n "`getarg n none`" ]; then
+   BUILD="byhand"
+else
+   echo "What type of build system does it have? Ant, Makefiles, or None?"
+   echo "Select:"
+   echo -e "\t[A] Ant"
+   echo -e "\t[M] Makefiles"
+   echo -e "\t[V] Maven"
+   echo -e "\t[N] None---make one for me (Default)"
+   echo -n "[Namv] $ "
+   read t
+   echo
+   case $t in
+      "A"|"a")
+         BUILD="ant"
+         echo "Selected: Ant"
+         ;;
+      "M"|"m")
+         BUILD="make"
+         echo "Selected: Makefiles"
+         ;;
+      "V"|"v")
+         BUILD="maven"
+         echo "Selected: Maven"
+         ;;
+      *)
+         BUILD="byhand"
+         echo "Selected: No upstream build system"
+         ;;
+   esac
+fi
+case $BUILD in
+   "make")
+   ;;
+   "ant")
+      DEPENDS="$DEPENDS, ant"
+   ;;
+   "maven")
+      DEPENDS="$DEPENDS, maven2, maven-debian-helper"
+   ;;
+   "byhand")
+   ;;
+esac
+
+if [ -n "`getarg d default`" ]; then
+   COMP="default"
+elif [ -n "`getarg g gcj`" ]; then
+   COMP="gcj"
+elif [ -n "`getarg 6 sun6`" ]; then
+   COMP="sun6"
+elif [ -n "`getarg o openjdk`" ]; then
+   COMP="open"
+else
+   echo "Which Java runtime does it need? Free runtime, or Sun?"
+   echo "Select:"
+   echo -e "\t[F] Default Free compiler/runtime (Default)"
+   echo -e "\t[G] GCJ"
+   echo -e "\t[6] Sun Java 1.6 (Package must be in contrib)"
+   echo -e "\t[o] OpenJDK 6"
+   echo -n "[FG6o] $ "
+   read t
+   echo
+   case $t in
+      "O"|"o")
+         COMP="open"
+         echo "Selected: OpenJDK 6"
+         ;;
+      "6")
+         COMP="sun6"
+         echo "Selected: Sun 1.6"
+         ;;
+      "g"|"G")
+         COMP="gcj"
+         echo "Selected: GCJ"
+         ;;
+      *)
+         COMP="default"
+         echo "Selected: Default Free compiler"
+         ;;
+   esac
+fi
+
+case $COMP in
+   "gcj")
+      COMPILER=gcj-jdk
+      JAVA_HOME=/usr/lib/jvm/java-gcj
+   ;;
+   "default")
+      COMPILER=default-jdk
+      JAVA_HOME=/usr/lib/jvm/default-java
+   ;;
+   "sun6")
+      COMPILER=sun-java6-jdk
+      JAVA_HOME=/usr/lib/jvm/java-6-sun
+      CONTRIB=contrib/
+      JVM=sun6
+   ;;
+   "open")
+      COMPILER=openjdk-6-jdk
+      JAVA_HOME=/usr/lib/jvm/java-6-openjdk
+      JVM=open
+   ;;
+esac
+
+YEAR=$(date +%Y)
+mkdir -p debian
+cat > debian/control <<END
+Source: $SRCPACKAGE
+Section: ${CONTRIB}$SECTION
+Priority: optional
+Maintainer: $DEBFULLNAME <$DEBEMAIL>
+Build-Depends: debhelper (>= $COMPAT), $COMPILER, javahelper (>= $JAVATOOLS_VERSION) $DEPENDS
+Standards-Version: $STANDARDS
+Homepage: <homepage>
+
+Package: $BINPACKAGE
+Architecture: all
+Depends: \${java:Depends}, \${misc:Depends}
+Recommends: \${java:Recommends}
+Description: Short Description
+ Long Description
+END
+
+if [ "$TYPE" = "lib" ] ; then
+    # add doc package template
+    cat >> debian/control <<END
+
+Package: $BINPACKAGE-doc
+Architecture: all
+Depends: \${java:Depends}, \${misc:Depends}
+Recommends: \${java:Recommends}
+Description: Short Description - doc
+ Long Description
+ .
+ This package contains the Javadoc API
+END
+
+fi
+
+cat > debian/copyright <<END
+Format: [URI OF THE FORMAT SPECIFICATION, SUCH AS http://svn.debian.org/wsvn/dep/web/deps/dep5.mdwn?op=file&rev=REVISION]
+Upstream-Name: [THE NAME UPSTREAM USES FOR THE SOFTWARE]
+Upstream-contact: [THE PREFERRED ADDRESS(ES) TO REACH THE UPSTREAM PROJECT]
+Source: [AN EXPLANATION FROM WHERE THE UPSTREAM SOURCE CAME FROM. TYPICALLY AN URL]
+[OTHER FIELDS]
+
+Files: *
+Copyright: Copyright $YEAR John Doe <jdoe@example.com>
+License: [STANDARD ABBREVIATION -- SEE "Short names" SECTION OF SPECIFICATION]
+ [LICENSE TEXT]
+
+Files: debian/*
+Copyright: Copyright $YEAR $DEBFULLNAME <$DEBEMAIL>
+License: [STANDARD ABBREVIATION]
+ [LICENSE TEXT]
+
+[OTHER FILE PARAGRAPHS]
+END
+
+echo $COMPAT > debian/compat
+
+EDITOR=true DEBFULLNAME="$DEBFULLNAME" DEBEMAIL="$DEBEMAIL" dch --create --package $SRCPACKAGE --newversion ${VERSION}-1 --distribution unstable --urgency low 
+
+cat > debian/rules <<END
+#!/usr/bin/make -f
+
+export JAVA_HOME=${JAVA_HOME}
+
+# Put depended upon jars in here
+# export CLASSPATH=
+
+%:
+	dh \$@ --with javahelper
+
+END
+      case $BUILD in
+         "ant")
+         ;;
+         "maven")
+      cat >> debian/rules <<END
+override_dh_auto_build:
+	# Build the package
+	mvn-debian build
+override_dh_auto_clean:
+	mvn-debian clean
+END
+         ;;
+         "make")
+         ;;
+         "byhand")
+		echo ${SRCPACKAGE}.jar src > debian/javabuild
+         ;;
+      esac
+   
+case $TYPE in
+   "app")
+      echo "$SRCPACKAGE.jar usr/share/$BINPACKAGE" > debian/$BINPACKAGE.install
+      cat >> debian/$BINPACKAGE.manifest <<END
+usr/share/$BINPACKAGE/$SRCPACKAGE.jar:
+ Main-Class: <Main Class>
+ Debian-Java-Home: $JAVA_HOME
+END
+      echo "usr/share/$BINPACKAGE/$SRCPACKAGE.jar usr/bin/$SRCPACKAGE" > debian/$BINPACKAGE.links
+   ;;
+   "lib")
+      echo "$SRCPACKAGE.jar" > debian/$BINPACKAGE.jlibs
+      if [ "$BUILD" = "byhand" ]; then
+	  echo "internal" > debian/$BINPACKAGE-doc.javadoc
+      else
+	  echo "<javadoc build dir here>" > debian/$BINPACKAGE-doc.javadoc
+      fi
+   ;;
+esac
+
+chmod +x debian/rules
+
+echo "Packaging created. You will have to edit most or all of the files in debian/ before it works"
+

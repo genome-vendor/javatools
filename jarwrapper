@@ -1,0 +1,41 @@
+#!/bin/sh --
+
+set -e
+
+JAR=$1
+shift
+
+if [  -z "$JAR" ]; then
+   echo "Jarwrapper must be run with a jar as the first parameter. Doing so via binfmt_misc is a good way to do it"
+   exit 1
+fi
+
+JAR="`readlink -f "$JAR"`"
+TEMP="`mktemp -d`"
+
+(cd "$TEMP"; fastjar xf "$JAR" META-INF/MANIFEST.MF)
+
+NEW_JAVA_HOMES="`sed -n '/^Debian-Java-Home:/s/^[^:]*: *//p' "$TEMP/META-INF/MANIFEST.MF"`"
+JAVAOPTS="`sed -n '/^Debian-Java-Parameters:/s/^[^:]*: *//p' "$TEMP/META-INF/MANIFEST.MF"`"
+rm -rf "$TEMP"
+
+for i in $NEW_JAVA_HOMES; do 
+   if [ -x "$i/bin/java" ]; then
+      JAVA="$i/bin/java"
+      JAVA_HOME="$i"
+   elif [ -x "$i/jre/bin/java" ]; then
+      JAVA="$i/jre/bin/java"
+      JAVA_HOME="$i/jre"
+   fi
+done
+
+if [ -z "$JAVA" ]; then
+   JAVA=java
+fi
+
+if which "$JAVA" >/dev/null 2>&1; then
+	export LD_LIBRARY_PATH=/usr/lib/jni 
+	exec $JAVA $JAVAOPTS -Djava.library.path=/usr/lib/jni -jar "$JAR" "$@"
+else
+	echo "In order to run Java programs you must install a compatible JRE. If you don't know what JRE you need, default-jre is probably a good bet"
+fi

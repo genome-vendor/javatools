@@ -1,0 +1,91 @@
+#!/bin/bash
+set -e
+
+# This file has been obtained from:
+#   http://cvs.fedoraproject.org/viewvc/rpms/eclipse-emf/devel/
+#
+# The author list below is not from the original file, but has been
+# written based on the CVS commit log (in case the CVS should some day
+# be unavailable).
+#
+# Written by: 2009, Mat Booth <fedora@matbooth.co.uk>
+# Modified by: 2009, Alexander Kurtakov <akurtako@redhat.com>
+#
+
+# uscan will run this script like
+# fetch-eclipse-source --upstream-version <version> <directory.txt file>
+
+# This script requires that these package are installed: cvs, gawk, tofrodos
+
+VERSION=$2
+DIRECTORY_TXT=$3
+
+if ! which cvs > /dev/null 2>&1; then
+	echo "$0: Cannot find cvs. Please install the cvs package." >&2
+	exit 1
+fi
+if ! which gawk > /dev/null 2>&1; then
+	echo "$0: Cannot find gawk. Please install the gawk package." >&2
+	exit 1
+fi
+if ! which fromdos > /dev/null 2>&1; then
+	echo "$0: Cannot find fromdos. Please install the tofrodos package." >&2
+	exit 1
+fi
+
+if test ! -f debian/control; then
+	echo "$0: Could not find debian/control." >&2
+	exit 1
+fi
+
+NAME=$(grep "Source:" debian/control | sed "s/^Source: //")
+
+MAPFILE=$NAME.map
+TEMPMAPFILE=temp.map
+
+echo "Exporting from CVS..."
+rm -rf ${NAME}-$VERSION
+mkdir ${NAME}-$VERSION
+
+mv $DIRECTORY_TXT ${NAME}-$VERSION/$MAPFILE
+pushd ${NAME}-$VERSION >/dev/null
+fromdos $MAPFILE
+grep ^[a-z] $MAPFILE > $TEMPMAPFILE
+
+gawk 'BEGIN {
+	FS=","
+}
+{
+if (NF <  4) {
+
+	split($1, version, "=");
+	split(version[1], directory, "@");
+	cvsdir=split($2, dirName, ":");
+	printf("cvs -d %s%s %s %s %s %s %s\n", ":pserver:anonymous@dev.eclipse.org:", dirName[cvsdir], "-q export -r", version[2], "-d", directory[2], directory[2]) | "/bin/bash";
+}
+else {
+
+	split($1, version, "=");
+	total=split($4, directory, "/");
+	cvsdir=split($2, dirName, ":");
+	printf("cvs -d %s%s %s %s %s %s %s\n", ":pserver:anonymous@dev.eclipse.org:", dirName[cvsdir], "-q export -r", version[2], "-d", directory[total], $4) | "/bin/bash";
+}
+
+}' $TEMPMAPFILE
+
+rm $TEMPMAPFILE $MAPFILE
+popd >/dev/null
+
+echo "Remove prebuilt binaries and jars..."
+find $NAME-$VERSION \( -name '*.exe' -o -name '*.dll' \) -delete
+find $NAME-$VERSION \( -name '*.so' -o -name '*.so.2' \) -delete
+find $NAME-$VERSION -name '*.jar' -delete
+echo "Remove empty directories..."
+find $NAME-$VERSION -depth -type d -empty -delete
+echo "Creating tarball '../${NAME}_$VERSION$DEBV.orig.tar.bz2'..."
+if test -f debian/fetch-eclipse-source.exclude; then
+	tar -acf ../${NAME}_$VERSION$DEBV.orig.tar.bz2 ${NAME}-$VERSION -X debian/fetch-eclipse-source.exclude
+else
+	tar -acf ../${NAME}_$VERSION$DEBV.orig.tar.bz2 ${NAME}-$VERSION
+fi
+rm -rf ${NAME}-$VERSION

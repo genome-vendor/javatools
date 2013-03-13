@@ -1,0 +1,94 @@
+#!/bin/bash --
+
+set -e
+
+. /usr/share/javahelper/jh_lib.sh
+
+syntax()
+{
+   echo -e "Usage: jh_classpath [options] [jar(s)]"
+   echo -e "Options:"
+   echo -e "\t-h --help: show this text"
+   echo -e "\t-V --version: show the version"
+   echo -e "\t-i --indep: act on all Arch: all packages"
+   echo -e "\t-a --arch: act on all Arch-specific packages"
+   echo -e "\t-s --same-arch: alias of --arch for compatibility with debhelper"
+   echo -e "\t-p<package> --package=<package>: package to act on (default=all)"  
+   echo -e "\t-P<packagedir> --tmpdir=<package>: package directory (default=\$CWD/debian/package)"  
+   echo -e "\t-c<classpath> --classpath=<classpath>: The classpath to set on the jar(s)"
+   echo -e "\t-v --verbose: show more information while running"
+   echo -e "\t-n --no-act: don't actually do anything, just print the results"
+   exit 1
+}
+
+ARGS="i indep a arch s same-arch p package P tmpdir v verbose n no-act c classpath" parseargs "$@"
+
+dh_testdir
+
+VERBOSE="`getarg v verbose`"
+NOACT="`getarg n noact`"
+
+if [ "$ARGC" == "0" ]; then
+	# read debian/$package.classpath
+	for p in `findpackages`; do
+		if [ -f "debian/$p.classpath" ]; then
+			cat "debian/$p.classpath" | while read jar cpath; do
+				if [ ! -f "$jar" ] ; then
+                                    jar="debian/$p/$jar"
+                                fi
+				if [ -n "$VERBOSE" ]; then
+					echo "Setting classpath on $jar to $cpath"
+				fi
+				if [ -n "$NOACT" ]; then
+					echo "Would run jh_manifest -p$p --classpath=$cpath $jar"
+				else
+					jh_manifest "-p$p" "--classpath=$cpath" "$jar"
+				fi
+			done
+		elif [ -f "debian/classpath" ]; then
+			cat "debian/classpath" | while read jar cpath; do
+				if [ ! -f "$jar" ] ; then
+                                    jar="debian/$p/$jar"
+                                fi
+				if [ -n "$VERBOSE" ]; then
+					echo "Setting classpath on $jar to $cpath"
+				fi
+				if [ -n "$NOACT" ]; then
+					echo "Would run jh_manifest -p$p --classpath=$cpath $jar"
+				else
+					jh_manifest "-p$p" "--classpath=$cpath" "$jar"
+				fi
+			done
+		fi
+	done
+else
+	# process jars with -c or $CLASSPATH
+	for (( i=0 ; i<ARGC; i++ )); do
+		jar=${ARGV[i]}
+                p=$(firstpackage)
+		if [ -f "$jar" ]; then
+			cpath="`getarg c classpath`"
+			if [ ! -f "$jar" ] ; then
+				jar="debian/$p/$jar"
+                        fi
+			if [ -z "$cpath" ]; then
+				cpath="`sed 's/:/ /g' <<< $CLASSPATH`"
+			fi
+			if [ -z "$cpath" ]; then
+				echo "Could not find a classpath, doing nothing"
+				exit 0
+			fi
+			if [ -n "$VERBOSE" ]; then
+				echo "Setting classpath on $jar to $cpath"
+			fi
+			if [ -n "$NOACT" ]; then
+				echo "Would run jh_manifest -p$p --classpath=$cpath $jar"
+			else
+				jh_manifest "-p$p" "--classpath=$cpath" "$jar"
+			fi
+		else
+			echo "Cannot find $jar: skipping"
+		fi
+	done
+fi
+

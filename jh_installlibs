@@ -1,0 +1,119 @@
+#!/bin/bash --
+
+set -e
+
+. /usr/share/javahelper/jh_lib.sh
+
+syntax()
+{
+   echo -e "Usage: jh_installlibs [options] [jars]"
+   echo -e "Options:"
+   echo -e "\t-h --help: show this text"
+   echo -e "\t-V --version: show the version"
+   echo -e "\t-i --indep: act on all Arch: all packages"
+   echo -e "\t-a --arch: act on all Arch-specific packages"
+   echo -e "\t-s --same-arch: alias of --arch for compatibility with debhelper"
+   echo -e "\t-p<package> --package=<package>: package to act on (default=all)"  
+   echo -e "\t-P<packagedir> --tmpdir=<package>: package directory (default=\$CWD/debian/package)"  
+   echo -e "\t-v --verbose: show more information while running"
+   echo -e "\t-n --no-act: don't actually do anything, just print the results"
+   echo -e "\t--no-mangle: don't try and sanitize the upstream version number"
+   echo -e "\t--upstream-version=<version>: manually set the upstream version"
+   echo -e "\t--version-strip=<regex>: manually supply the regex to remove from the upstream version number"
+   exit 1
+}
+
+ARGS="i indep a arch s same-arch p package P tmpdir v verbose n no-act no-mangle upstream-version version-strip" parseargs "$@"
+
+dh_testdir
+
+FULL_VERSION="`dpkg-parsechangelog  | sed -n '/^Version:/s/^[^:]*: \(.*\)$/\1/p'`"
+VERSION="`echo "$FULL_VERSION" | sed -n 's/\(.*:\)\?\([^-]*\)\(-.*\)\?/\2/p' `"
+VERBOSE="`getarg v verbose`"
+DEFAULT_VERSION_MANGLE=".dfsg[0-9]*$"
+
+function processjar()
+{
+	p="$1"
+	j="$2"
+	from="$j"
+	to="`basename "$j"`"
+
+	if [ -n "`getarg upstream-version`" ]; then
+		VERSION="`getarg upstream-version`"
+	elif [ -n "`getarg no-mangle`" ]; then
+		true
+	elif [ -n "`getarg version-strip`" ]; then
+		VERSION="$(sed "s/`getarg version-strip`//" <<< $VERSION )"
+	else
+		VERSION="$(sed "s/$DEFAULT_VERSION_MANGLE//" <<< $VERSION )"
+	fi
+
+	if [ "$to" != "${to%-${VERSION}.jar}" ]; then
+		to="${to%-${VERSION}.jar}.jar"
+	fi
+
+	if [ -n "`getarg n no-act`" ]; then
+	        echo mkdir -p "$PACKAGEDIR/usr/share/java"
+		echo install -m 644 "$from" "$PACKAGEDIR/usr/share/java/${to%.jar}-${VERSION}.jar"
+		echo ln -sf ${to%.jar}-${VERSION}.jar "$PACKAGEDIR/usr/share/java/$to"
+	else
+		if [ -n "$VERBOSE" ]; then
+			echo "Installing library $j into package $p"
+		fi
+		mkdir -p "$PACKAGEDIR/usr/share/java"
+		install -m 644 "$from" "$PACKAGEDIR/usr/share/java/${to%.jar}-${VERSION}.jar"
+		ln -sf ${to%.jar}-${VERSION}.jar "$PACKAGEDIR/usr/share/java/$to"
+	fi
+}
+
+if [ "$ARGC" != "0" ] ; then
+   
+   p="`firstpackage`"    
+   PACKAGEDIR="`getarg P tmpdir`"
+   if [ -z "$PACKAGEDIR" ]; then
+      PACKAGEDIR="`pwd`/debian/$p"
+   else
+      PACKAGEDIR=`readlink -f $PACKAGEDIR`
+   fi
+
+   for (( i=0; i < $ARGC; i++ )); do
+      j=${ARGV[i]}
+		processjar "$p" "$j"
+   done
+   exit 0
+fi
+
+for p in `findpackages`; do
+
+   PACKAGEDIR="`getarg P tmpdir`"
+   if [ -z "$PACKAGEDIR" ]; then
+      PACKAGEDIR="`pwd`/debian/$p"
+   else
+      PACKAGEDIR=`readlink -f $PACKAGEDIR`
+   fi
+
+   if [ -n "$VERBOSE" ]; then
+      echo "Searching $PACKAGEDIR for $p"
+   fi
+
+   FILE=
+   if [ -f debian/$p.jlibs ]; then
+      FILE=debian/$p.jlibs
+   elif [ -f debian/jlibs ]; then
+      FILE=debian/jlibs
+   else
+      continue
+   fi
+
+   IFS='
+'
+   for i in `cat "$FILE"`; do
+		processjar "$p" "$i"	
+
+   done
+
+   unset PACKAGEDIR
+
+done
+

@@ -1,0 +1,103 @@
+#!/bin/bash --
+
+set -e
+
+. /usr/share/javahelper/jh_lib.sh
+
+syntax()
+{
+   echo -e "Usage: jh_linkjars [options] [target]"
+   echo -e "Options:"
+   echo -e "\t-h --help: show this text"
+   echo -e "\t-V --version: show the version"
+   echo -e "\t-v --verbose: show more information while running"
+	echo -e "\t-t --transitive: transitively link jars"
+   echo -e "\t-n --no-act: don't actually do anything, just print the results"
+   echo -e "\t-u --unlink: remove the links instead of adding them"
+   exit 1
+}
+
+ARGS="v verbose n no-act u unlink t transitive" parseargs "$@"
+
+
+function findjars()
+{
+	pkg="$1"
+	if [ -z "$pkg" ]; then
+		pkg="$(sed -n '/^Source:/s/.*: //p' < debian/control)"
+		BDS=$(grep-dctrl --no-field-names --show-field Build-Depends,Build-Depends-Indep -F source "$pkg" debian/control | tr , ' ' | sed 's/([^)]*)//g')
+	else
+		BDS=$(dpkg -s "$pkg" | sed -n 's/([^)]*)//g;s/,/ /g;/^Depends:/s/.*: //p')
+	fi
+
+	JARS=""
+	for d in $BDS; do 
+		j="$(dpkg -L $d | grep "^/usr/share/java/.*\.jar$")"
+		k=""
+		if [ -n "$j" ] &&  [ `getarg t transitive` ]; then
+			k=$(findjars "$d")
+		fi
+		JARS="$JARS $j $k"
+	done
+	echo $JARS
+}
+
+function unlinkjars()
+{
+	target="$1"
+	JARS="`findjars`"
+	
+	for j in $JARS; do
+		if [ -n "`getarg n no-act`" ]; then
+			echo rm -f "$target/`basename "$j"`"
+			continue
+		fi
+		if [ -n "`getarg v verbose`" ]; then
+			echo Removing link for $j from $target
+		fi
+		rm -f "$target/`basename "$j"`"
+	done
+}
+function linkjars()
+{
+	target="$1"
+	JARS="`findjars`"
+
+	if [ -z "`getarg n no-act`" ]; then
+		mkdir -p "$target"
+	fi
+	
+	for j in $JARS; do
+		if [ -f "$j" ]; then
+			if [ -n "`getarg n no-act`" ]; then
+				echo ln -sf "$j" "$target/"
+				continue
+			fi
+			if [ -n "`getarg v verbose`" ]; then
+				echo Adding link for $j to $target
+			fi
+			ln -sf "$j" "$target/"
+		fi
+	done
+}
+
+dh_testdir
+
+if [ "$ARGC" != "0" ] ; then
+   
+	target="${ARGV[0]}"
+	if [ -n "`getarg u unlink`" ]; then
+		unlinkjars "$target"
+	else
+		linkjars "$target"
+	fi
+elif [ -f debian/linkjars ]; then
+	for target in `cat debian/linkjars`; do
+		if [ -n "`getarg u unlink`" ]; then
+			unlinkjars "$target"
+		else
+			linkjars "$target"
+		fi
+	done
+fi
+

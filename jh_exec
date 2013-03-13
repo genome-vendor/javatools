@@ -1,0 +1,65 @@
+#!/bin/bash --
+
+EXECDIRS="bin usr/bin usr/games"
+
+set -e
+
+. /usr/share/javahelper/jh_lib.sh
+
+syntax()
+{
+   echo "Usage: jh_exec [options]"
+   echo "Options:"
+   echo -e "\t-h --help: show this text"
+   echo -e "\t-V --version: print the version"
+   echo -e "\t-i --indep: run for all Arch: all packages"
+   echo -e "\t-a --arch: run for all Arch-specific packages"
+   echo -e "\t-s --same-arch: alias of --arch for compatibility with debhelper"
+   echo -e "\t-p<package> --package=<package>: package to act on (default=all)"  
+   echo -e "\t-P<packagedir> --tmpdir=<package>: package directory (default=\$CWD/debian/package)"  
+   echo -e "\t-v --verbose: show more information while running"
+   echo -e "\t-n --no-act: don't actually do anything, just print the results"
+   exit 1
+}
+
+ARGS="i indep a arch s same-arch p package P tmpdir v verbose n no-act" parseargs "$@"
+
+VERBOSE="`getarg v verbose`"
+dh_testdir
+
+for p in `findpackages`; do
+
+   PACKAGEDIR="`getarg P tmpdir`"
+   if [ -z "$PACKAGEDIR" ]; then
+      PACKAGEDIR="`pwd`/debian/$p"
+   else
+      PACKAGEDIR=`readlink -f $PACKAGEDIR`
+   fi
+
+   if [ -n "$VERBOSE" ]; then
+      echo "Searching $PACKAGEDIR for $p"
+   fi
+
+   for d in $EXECDIRS; do
+      for j in $PACKAGEDIR/$d/*; do
+         if [ -h "$j" ]; then
+            TARGET=`readlink -f "$j"`
+            if [ "${TARGET%.jar}" != "$TARGET" ]; then
+               if [ -n "$VERBOSE" ]; then
+                  echo "Making $TARGET executable"
+               fi
+
+               if [ -z "`getarg n no-act`" ]; then
+                  chmod +x "$TARGET"
+               else
+                  echo chmod +x "$TARGET"
+               fi
+            fi
+         fi
+      done
+   done
+
+   unset PACKAGEDIR
+
+done
+

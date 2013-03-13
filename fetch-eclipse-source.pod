@@ -1,0 +1,38 @@
+=head1 NAME
+
+fetch-eclipse-source - checks out an eclipse project from CVS.
+
+=head1 SYNOPSIS
+
+ fetch-eclipse-source --upstream-version <version> <directory.txt file>
+
+=head1 DESCRIPTION
+
+Used to checkout an eclispe project from CVS via L<uscan(1)>. The
+directory.txt is a file containing the parts to check out and is
+usually provided by upstream.
+
+It can also exclude parts of the upstream projects by using the
+exclude file (see FILES)
+
+=head1 FILES
+
+=over 4
+
+=item debian/fetch-eclipse-source.exclude
+
+If present, this file will be used to exclude parts of the project
+from the resulting tarball. The file is passed to L<tar(1)> via
+its I<-X> option.
+
+=back
+
+=head1 SEE ALSO
+
+L<uscan(1)>
+
+=head1 AUTHOR
+
+Niels Thykier <niels@thykier.net> wrote this manpage.
+
+=cut

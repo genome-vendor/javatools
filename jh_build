@@ -1,0 +1,168 @@
+#!/bin/bash --
+
+EXECDIRS="bin usr/bin usr/games"
+
+set -e
+. /usr/share/javahelper/jh_lib.sh
+
+syntax()
+{
+   echo -e "Usage: jh_build [options] [<jar> <src>]"
+   echo -e "Options:"
+   echo -e "\t-h --help: show this text"
+   echo -e "\t-V --version: show the version"
+   echo -e "\t-q --quiet: don't print the build commands as they are executed"
+   echo -e "\t-m<class> --main=<class>: Use this class as the main class"
+   echo -e "\t-j<java-home> --java-home=<java-home>: Set the JAVA_HOME variable"
+   echo -e "\t-o<javac-opts> --javacopts=<javac-opts>: Options to the Java compiler"
+   echo -e "\t--clean: clean the build tree"
+   echo -e "\t-N --no-javadoc: Disable building javadoc"
+   echo -e "\t-J --javadoc: Enable building javadoc"
+   echo -e "\t--javadoc-opts=<javadoc-opts>: Options to javadoc"
+   echo -e "Environment Variables:"
+   echo -e "\tJAVA_HOME: path to the JDK to use"
+   echo -e "\tCLASSPATH: classpath to compile with and set in the manifest"
+   echo -e "\tJH_JAR_EXTRA: extra files to be included in the jar"
+   exit 1
+}
+
+ARGS="q quiet m main j java-home o javacopts J javadoc N no-javadoc O javadoc-opts clean" parseargs "$@"
+
+if [ -n "`getarg clean`" ]; then
+   rm -rf debian/_jh_manifest* debian/_jh_build*
+	if [ -f debian/javabuild ]; then
+		rm -f `awk '{print $1}' < debian/javabuild`
+	fi
+   exit 0
+fi
+
+if [ -n "`getarg j java-home`" ]; then
+   JAVA_HOME="`getarg j java-home`"
+elif [ -z "$JAVA_HOME" ]; then
+   if [ -d /usr/lib/jvm/default-java ]; then
+      JAVA_HOME=/usr/lib/jvm/default-java
+   elif [ -d /usr/lib/jvm/java-gcj ]; then
+      JAVA_HOME=/usr/lib/jvm/java-gcj
+   else
+		JAVA_HOME=invalid
+   fi
+fi
+
+JH_JAVAC_OPTS="`getarg o javacopts`"
+JH_JAVADOC_OPTS="`getarg O javadoc-opts`"
+
+if ! grep -- -source <<< "$JH_JAVAC_OPTS" &>/dev/null; then
+	JH_JAVAC_OPTS="-source 1.5 $JH_JAVAC_OPTS"
+fi
+
+function dobuild()
+{
+
+	jarfile="$1"
+	shift
+	ext="`basename "$jarfile" .jar`"
+	srcdirs=
+	srcfiles=
+	while [ -n "$1" ]; do 
+		if [ -f "$1" ]; then
+			srcfiles="$srcfiles $1"
+		elif [ -d "$1" ]; then
+			srcdirs="$srcdirs $1"
+		else
+			echo "Ignoring $1 because it does not exist"
+		fi
+		shift
+	done
+
+	if [ "$JAVA_HOME" == "invalid" ]; then
+      echo "Cannot find any JAVA_HOME: aborting" 1>&2
+      exit 1
+	fi
+
+	rm -f debian/_jh_manifest.$ext
+	(
+            if [ -n "$CLASSPATH" ]; then
+		echo -n "Class-Path: "
+		echo $CLASSPATH | sed 's/:/ /g'
+	    fi
+	    if [ -n "`getarg m main`" ]; then
+		echo "Main-Class: `getarg m main`"
+		echo "Debian-Java-Home: $JAVA_HOME"
+	    fi
+        ) | perl -p -e 's/(.{72})(?=.)/$1\n /go' >> debian/_jh_manifest.$ext
+        # (NB: see D::JH::Java::write_manifest_section_fd on the regex above)
+
+   CLASSPATHDOCS="`for i in $(grep-dctrl --no-field-names --show-field Build-Depends,Build-Depends-Indep -F source "$pkg" debian/control | tr , ' ' | sed 's/([^)]*)//g') ; do dpkg -L $i 2>/dev/null | grep /usr/share/doc/.*/api$; done | sed 's/^/-link /' | xargs`"
+
+	mkdir -p debian/_jh_build.$ext
+	if [ -n "$srcdirs" ]; then
+
+		if [ -z "`getarg q quiet`" ]; then
+			echo find $srcdirs -name '*.java' -and -type f -print0 '|' xargs -0 $JAVAC -cp $CLASSPATH:debian/_jh_build.$ext -d debian/_jh_build.$ext $JH_JAVAC_OPTS $srcfiles
+		fi
+
+		find $srcdirs -name '*.java' -and -type f -print0 | xargs -0 $JAVAC -cp $CLASSPATH:debian/_jh_build.$ext -d debian/_jh_build.$ext $JH_JAVAC_OPTS $srcfiles
+
+		if [ -n "`getarg J javadoc`" ] || [ -z "`getarg N no-javadoc`" ]; then
+			if [ -z "`getarg q quiet`" ]; then
+				echo find $srcdirs -name '*.java' -and -type f -print0 '|' xargs -0 $JAVADOC $CLASSPATHDOCS -classpath $CLASSPATH:debian/_jh_build.$ext -d debian/_jh_build.javadoc/api -quiet $JH_JAVADOC_OPTS $srcfiles
+			fi
+
+			find $srcdirs -name '*.java' -and -type f -print0 | xargs -0 $JAVADOC $CLASSPATHDOCS -classpath $CLASSPATH:debian/_jh_build.$ext -d debian/_jh_build.javadoc/api -quiet $JH_JAVADOC_OPTS $srcfiles
+		fi
+
+	elif [ -n "$srcfiles" ]; then
+
+		if [ -z "`getarg q quiet`" ]; then
+			echo $JAVAC -cp $CLASSPATH:debian/_jh_build.$ext -d debian/_jh_build.$ext $JH_JAVAC_OPTS $srcfiles
+		fi
+
+		$JAVAC -cp $CLASSPATH:debian/_jh_build.$ext -d debian/_jh_build.$ext $JH_JAVAC_OPTS $srcfiles
+
+		if [ -n "`getarg J javadoc`" ] || [ -z "`getarg N no-javadoc`" ]; then
+			if [ -z "`getarg q quiet`" ]; then
+				echo $JAVADOC $CLASSPATHDOCS -classpath $CLASSPATH:debian/_jh_build.$ext -d debian/_jh_build.javadoc.ext/api -quiet $JH_JAVADOC_OPTS $srcfiles
+			fi
+			$JAVADOC $CLASSPATHDOCS -classpath $CLASSPATH:debian/_jh_build.$ext -d debian/_jh_build.javadoc.ext/api -quiet $JH_JAVADOC_OPTS $srcfiles
+		fi
+
+	else
+		exit 0
+	fi
+
+	touch "$jarfile"
+	jarpath="`readlink -f "$jarfile"`"
+
+	(
+		cd debian/_jh_build.$ext;
+		if [ -z "`getarg q quiet`" ]; then
+			echo $JAR cfm "$jarpath" ../_jh_manifest.$ext *
+		fi
+		$JAR cfm  "$jarpath" ../_jh_manifest.$ext *
+	)
+	if [ -n "$JH_JAR_EXTRA" ]; then
+		if [ -z "`getarg q quiet`" ]; then
+			echo $JAR uf "$jarpath" $JH_JAR_EXTRA
+		fi
+		$JAR uf "$jarpath" $JH_JAR_EXTRA
+	fi
+
+}
+
+JAVAC="${JAVA_HOME}/bin/javac"
+JAVADOC="${JAVA_HOME}/bin/javadoc"
+JAR="${JAVA_HOME}/bin/jar"
+
+jarfile="${ARGV[0]}"
+
+if [ -z "$jarfile" ]; then
+	if [ -f debian/javabuild ]; then
+		cat debian/javabuild | while read line; do
+			dobuild $line
+		done
+	fi
+else
+	dobuild "${ARGV[@]}"
+fi
+
+

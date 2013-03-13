@@ -1,0 +1,275 @@
+#!/bin/bash --
+
+MINJARWRAPPERVER=0.5
+
+. /usr/share/javahelper/jh_lib.sh
+
+set -e
+
+syntax()
+{
+   echo -e "Usage: jh_depends [options]"
+   echo -e "Options:"
+   echo -e "\t-h --help: show this text"
+   echo -e "\t-V --version: print the version"
+   echo -e "\t-p<package> --package=<package>: package to act on (default=all)"  
+   echo -e "\t-P<packagedir> --tmpdir=<package>: package directory (default=\$CWD/debian/package)"  
+   echo -e "\t-v --verbose: show more information while running"
+   echo -e "\t-i --indep: work on all indep packages"
+   echo -e "\t-a --arch: work on all arch-specific packages"
+   echo -e "\t-s --same-arch: alias of --arch for compatibility with debhelper"
+   echo -e "\t-n --no-act: don't actually do anything, just print the results"
+   echo -e "\t-j[<jvm>] --jvm[=<jvm>]: Options are: default, headless, gcj, open, sun, sun6. Can be a space-separated list."
+   echo -e "\t-X<package> --exclude=<package>: don't add this package to depends"  
+   echo -e ""
+   echo -e "Note: \"headless\" (for --jvm) affects other values and alternatives (e.g. java6-runtime becomes"
+   echo -e " java6-runtime-headless) and \"default\" cannot be used with any other value except \"headless\""
+   echo -e " If \"headless\" is the only value given then it is assumed to be \"headless default\""
+   exit 1
+}
+
+# getclassversion <current> <path to classes>
+# returns the max of <current> and <all the classes under the path>
+getclassversion()
+{
+	current=$1
+	classes="$2"
+	for i in `find "$classes" -name "*.class"`; do
+		new=`hd -s 7 -n 1 -d "$i" | sed -n '2s/.*\([^ ][^ ]\) *$/\1/p'`
+		if (( $current < $new )); then
+			current=$new
+		fi
+	done
+	echo $current
+}
+
+# getalternatedepends <version>
+getalternatedepends()
+{
+	if (( $1 < 48 )); then
+		echo "| java-runtime$2 | java2-runtime$2 | java5-runtime$2 | java6-runtime$2"
+	elif [ "$1" == "48" ]; then
+		echo "| java2-runtime$2 | java5-runtime$2 | java6-runtime$2"
+	elif [ "$1" == "49" ]; then
+		echo "| java5-runtime$2 | java6-runtime$2"
+	elif [ "$1" == "50" ]; then
+		echo "| java6-runtime$2"
+	else
+		echo "Warning: Class version too new to recognise ($1), might not run with any JVMs" 1>&2
+	fi
+}
+
+function home-to-jvm()
+{
+	JHOME="$1"
+	if echo $JHOME | grep headless >/dev/null; then
+		JVM="$JVM headless"
+	fi
+	if echo $JHOME | grep default >/dev/null; then
+		JVM="$JVM default"
+	fi
+	if echo $JHOME | grep gcj >/dev/null; then
+		JVM="$JVM gcj"
+	fi
+	if echo $JHOME | grep 6-openjdk >/dev/null; then
+		JVM="$JVM open"
+	fi
+	if echo $JHOME | grep 6-sun >/dev/null; then
+		JVM="$JVM sun6"
+	fi
+	if echo $JHOME | grep 1.5.0-sun >/dev/null; then
+		JVM="$JVM sun5"
+	fi
+	echo "$JVM"
+}
+
+ARGS="X exclude p package P tmpdir v verbose i indep a arch s same-arch n no-act j jvm" parseargs "$@"
+
+VERBOSE="`getarg v verbose`"
+
+dh_testdir
+
+TEMPDIR=`mktemp -d`
+OLDDIR=`pwd`
+
+WRAPPER=
+
+EXCLUDES="`getarg X exclude`"
+
+PACKAGES=`findpackages`
+for p in $PACKAGES; do
+
+   PACKAGEDIR="`getarg P tmpdir`"
+   if [ -z "$PACKAGEDIR" ]; then
+      PACKAGEDIR="`pwd`/debian/$p"
+   else
+      PACKAGEDIR="`readlink -f $PACKAGEDIR`"
+   fi
+
+   if [ ! -d "$PACKAGEDIR" ]; then
+      continue
+   fi
+
+   if [ -n "$VERBOSE" ]; then
+      echo "Searching $PACKAGEDIR for $p"
+   fi
+
+   # Assume all links to jars points to real jars, so we do not
+   #  have to process links... hopefully.
+   JARS=`find $PACKAGEDIR -type f -a -name '*.jar'`
+
+   if [ -n "$VERBOSE" ]; then
+      echo "Searching" $JARS
+   fi
+
+	[ -n "$TEMPDIR" ] && rm -rf "$TEMPDIR/"*
+	cd "$TEMPDIR"
+
+   JARDEPS=""
+	classversion=0
+   for i in $JARS; do
+      if [ -x "$i" ]; then
+         WRAPPER="true"
+      fi
+      jar xf "$i"
+		classversion=`getclassversion $classversion .`
+      JARDEPS="$JARDEPS `extractline META-INF/MANIFEST.MF Class-Path`"
+      if grep ^Main-Class META-INF/MANIFEST.MF >/dev/null; then 
+         JHOME="`extractline META-INF/MANIFEST.MF Debian-Java-Home`"
+			JVM="`home-to-jvm "$JHOME"`"
+      fi
+      [ -n "$TEMPDIR" ] && rm -rf "$TEMPDIR/"*
+   done
+   JARDEPS=`echo $JARDEPS | xargs -n1 | sort -u`
+
+   if [ -n "$VERBOSE" ]; then
+      echo "Found Jars:" $JARDEPS
+   fi
+
+   LOCALDEBDEPS=""
+   DEBDEPS=""
+	NEWJARDEPS=""
+   for i in $JARDEPS; do
+		if [ -e "$i" ]; then 
+			realjar="`readlink -f "$i"`"
+		elif [ -e "/usr/share/java/$i" ]; then
+			realjar="`readlink -f "/usr/share/java/$i"`"
+		else
+			realjar="$i"
+		fi
+      for j in $PACKAGES; do
+			if ! grep "$j" <<< "$EXCLUDES" > /dev/null; then
+				if [ -n "$VERBOSE" ]; then
+					echo "Checking: " $OLDDIR/debian/$j$realjar
+				fi
+				if [ -f $OLDDIR/debian/$j$realjar ]; then
+					LOCALDEBDEPS="$LOCALDEBDEPS $j (>= \${source:Version})"
+				else 
+					NEWJARDEPS="$NEWJARDEPS $realjar"
+				fi
+			else
+				if [ -n "$VERBOSE" ]; then
+					echo "Excluding package $j from depends"
+				fi
+			fi
+      done
+   done
+
+   if [ -n "$NEWJARDEPS" ]; then
+      DEBDEPS="$DEBDEPS `dpkg -S $NEWJARDEPS 2>/dev/null | grep -v ^$p: | cut -d: -f1 | sort -u`"
+   fi
+
+	REALDEBDEPS=""
+	for d in $DEBDEPS; do
+		if grep "$d" <<< "$EXCLUDES" > /dev/null; then
+			echo "Excluding package $d from depends"
+		else
+			REALDEBDEPS="$REALDEBDEPS $d"
+		fi
+	done
+	DEBDEPS="$LOCALDEBDEPS $REALDEBDEPS"
+		
+	
+   if [ -n "$VERBOSE" ]; then
+      echo "Found Debs:" $DEBDEPS
+   fi
+   if [ -n "$WRAPPER" ]; then
+      DEBDEPS="jarwrapper (>=0.5) $DEBDEPS"
+   fi
+   JVMDEPS=
+   if [ -n "`getarg j jvm`" ] && [ -z "$JVM" ]; then
+      JVM="`getarg j jvm`"
+   fi
+
+	if [ -n "$WRAPPER" ] && [ -z "$JVM" ]; then
+		if [ -n "$JAVA_HOME" ]; then
+			JVM="`home-to-jvm "$JAVA_HOME"`"
+		else
+			JVM="default"
+		fi
+	fi
+
+   if [ -n "$JVM" ]; then
+      if echo $JVM | grep -q headless ; then
+         headless="-headless"
+         JVM=`echo $JVM | sed s/headless//g`
+         # Check if JVM is empty now (or just whitespace)
+         [ -z "`echo $JVM | sed s/\s*//g`" ] && JVM="default"
+      fi
+      for j in $JVM; do
+	 alternateversiondeps=`getalternatedepends $classversion $headless`
+         if [ -n "$JVMDEPS" ]; then
+            JVMDEPS="$JVMDEPS |"
+         fi
+         case "$j" in
+            "default"|"true")
+               JVMDEPS="default-jre$headless $alternateversiondeps "
+               break
+               ;;
+            "gcj")
+               JVMDEPS="$JVMDEPS gcj-jre$headles $alternateversiondeps "
+               ;;
+            "sun"|"sun6")
+               JVMDEPS="$JVMDEPS sun-java6-jre$headless "
+               ;;
+            "open")
+               JVMDEPS="$JVMDEPS openjdk-6-jre$headless "
+               ;;
+            *)
+               echo "Warning: unknown JVM type: $j"
+               ;;
+         esac
+      done
+      if [ -n "$JVMDEPS" ]; then
+         JVMDEPS="$JVMDEPS, "
+      fi
+   fi
+   cd "$OLDDIR"
+   # Do not rely on the presence of /usr/share/doc, it might have been removed already and
+   # it is a policy voliation to do so. #632620
+   if [ -d "$PACKAGEDIR/usr/share/doc" ] ; then
+       API=`find "$PACKAGEDIR/usr/share/doc" -type f -name 'package-list' -exec dirname {} \;`
+       DOC_REC=`/usr/share/javahelper/jh_scanjavadoc $API`
+   else
+       API=''
+       DOC_REC=''
+   fi
+
+   if [ -n "$VERBOSE" ]; then
+      echo "Adding substvars:" "java:Depends=$JVMDEPS`echo $DEBDEPS | sed 's/\([a-zA-Z0-9_.+-]*\( *([^)]*)\)\{0,1\}\)/\1, /g;s/, *$//'`" \
+           "java:Recommends=$DOC_REC"
+   fi
+
+   if [ -z "`getarg n no-act`" ]; then
+      echo "java:Depends=$JVMDEPS`echo $DEBDEPS | sed 's/\([a-zA-Z0-9_.+-]*\( *([^)]*)\)\{0,1\}\)/\1, /g;s/, *$//'`" >> debian/$p.substvars
+      echo "java:Recommends=$DOC_REC" >> debian/$p.substvars
+   else
+      echo "java:Depends=$JVMDEPS`echo $DEBDEPS | sed 's/\([a-zA-Z0-9_.+-]*\( *([^)]*)\)\{0,1\}\)/\1, /g;s/, *$//'`"
+      echo "java:Recommends=$DOC_REC"
+   fi
+
+   unset PACKAGEDIR
+
+done
+rm -rf "$TEMPDIR"
+

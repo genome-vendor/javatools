@@ -1,0 +1,11 @@
+jh_build.1
+jh_depends.1
+jh_exec.1
+jh_installlibs.1
+jh_installjavadoc.1
+jh_makepkg.1
+jh_classpath.1
+jh_repack.1
+jh_linkjars.1
+tmp/*.1
+tmp/*.3

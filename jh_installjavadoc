@@ -1,0 +1,118 @@
+#!/bin/bash --
+
+set -e
+
+. /usr/share/javahelper/jh_lib.sh
+
+syntax()
+{
+   echo -e "Usage: jh_installjavadoc [options] [src] [target]"
+   echo -e "Options:"
+   echo -e "\t-h --help: show this text"
+   echo -e "\t-V --version: show the version"
+   echo -e "\t-i --indep: act on all Arch: all packages"
+   echo -e "\t-a --arch: act on all Arch-specific packages"
+   echo -e "\t-s --same-arch: alias of --arch for compatibility with debhelper"
+   echo -e "\t-p<package> --package=<package>: package to act on (default=all)"  
+   echo -e "\t-P<packagedir> --tmpdir=<package>: package directory (default=\$CWD/debian/package)"  
+   echo -e "\t-v --verbose: show more information while running"
+   echo -e "\t-n --no-act: don't actually do anything, just print the results"
+   echo -e "\t-A<author> --author=<author>: Author of the javadoc"  
+   exit 1
+}
+
+ARGS="A author i indep a arch s same-arch p package P tmpdir v verbose n no-act" parseargs "$@"
+
+dh_testdir
+
+VERBOSE="`getarg v verbose`"
+AUTHOR="`getarg A author`"
+
+function installjavadoc() 
+{
+
+	package="$1"
+	src="$2"
+	target="$3"
+
+	if [ -z "$src" ]; then
+		echo "Error: trying to install from empty source"
+		exit 1
+	fi
+	if [ ! -d "$src" ]; then
+		echo "Javadoc source $src does not exist or is not a directory, skipping"
+		return
+	fi
+
+	if [ -z "$target" ]; then
+		target="debian/$package/usr/share/doc/$package/api"
+		docbasepath="/usr/share/doc/$package/api"
+	else
+		docbasepath="/$target"
+		target="debian/$package/$target"
+	fi
+
+	if [ -n "$VERBOSE" ]; then
+		echo "Installing javadoc from $src into package $package"
+	fi
+
+	if [ -n "`getarg n no-act`" ]; then
+		echo mkdir -p "`dirname "$target"`"
+		echo cp -r "$src" "$target"
+		echo cat \> debian/$package.doc-base.javadoc
+	else
+		cat > debian/$package.doc-base.javadoc <<END
+Document: $package
+Title: API JavaDoc for $package
+Author: $AUTHOR
+Abstract: This the API JavaDoc for $package
+Section: Programming/Java
+
+Format: HTML
+Index: $docbasepath
+Files: $docbasepath/*.html
+END
+	echo "debian/$package.doc-base.javadoc" >> debian/.javahelper_clean
+
+		mkdir -p "`dirname "$target"`"
+		cp -r "$src" "$target"
+	fi
+}
+
+
+if [ "$ARGC" != "0" ] ; then
+   
+   p="`firstpackage`"    
+	installjavadoc "$p" "${ARGV[0]}" "${ARGV[1]}"
+   exit 0
+fi
+
+for p in `findpackages`; do
+
+   PACKAGEDIR="`getarg P tmpdir`"
+   if [ -z "$PACKAGEDIR" ]; then
+      PACKAGEDIR="`pwd`/debian/$p"
+   else
+      PACKAGEDIR=`readlink -f $PACKAGEDIR`
+   fi
+
+   DIR=
+   if [ -f debian/$p.javadoc ]; then
+      DIR="`awk '{print $1}' debian/$p.javadoc`"
+      TARGET="`awk '{print $2}' debian/$p.javadoc`"
+   elif [ -f debian/javadoc ]; then
+      DIR="`awk '{print $1}' debian/javadoc`"
+      TARGET="`awk '{print $2}' debian/javadoc`"
+	else
+      continue
+   fi
+
+	if [ "$DIR" = "internal" ] && [ -d debian/_jh_build.javadoc/api ]; then
+		DIR=debian/_jh_build.javadoc/api
+	fi
+
+   installjavadoc "$p" "$DIR" "$TARGET"
+   unset PACKAGEDIR
+
+done
+

@@ -1,0 +1,3 @@
+jardetector /usr/bin
+jarwrapper /usr/bin
+java-arch.sh /usr/share/jarwrapper

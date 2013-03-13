@@ -1,0 +1,10 @@
+#!/bin/sh --
+
+set -e
+
+if test -x /usr/sbin/update-binfmts ; then 
+   update-binfmts --remove jarwrapper /usr/bin/jarwrapper 
+fi
+
+#DEBHELPER#
+
